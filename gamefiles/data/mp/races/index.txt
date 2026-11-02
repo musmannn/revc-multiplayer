@@ -1,0 +1,7 @@
+# Race routes for reVC multiplayer, one .route file per line (in this folder).
+# See docs/multiplayer/README.md for the format. Record new ones in a session
+# with the chat commands /rec new NAME, /rec grid, /rec cp, /rec save.
+#
+# The four built-in routes (Ocean Drive Sprint, Starfish Loop, Bridge Run,
+# Little Havana Circuit) get added here once they're recorded and driven
+# in-game.

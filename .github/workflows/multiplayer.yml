@@ -1,0 +1,151 @@
+name: "Multiplayer: build and test"
+
+on:
+  push:
+    paths:
+      - 'mp/**'
+      - 'vendor/enet/**'
+      - 'vendor/doctest/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'premake5.lua'
+      - 'gamefiles/**'
+      - 'docs/multiplayer/install.md'
+      - '.github/workflows/multiplayer.yml'
+  pull_request:
+    paths:
+      - 'mp/**'
+      - 'vendor/enet/**'
+      - 'vendor/doctest/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'premake5.lua'
+      - 'gamefiles/**'
+      - 'docs/multiplayer/install.md'
+      - '.github/workflows/multiplayer.yml'
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S mp -B build-mp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-mp --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build-mp -C Release --output-on-failure --timeout 300
+
+      - name: Upload relay and fake client
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp-tools-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            build-mp/revc-relay
+            build-mp/revc-fakeclient
+            build-mp/Release/revc-relay.exe
+            build-mp/Release/revc-fakeclient.exe
+
+  # The game itself, with MULTIPLAYER on. No game assets are needed to build.
+  game-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglfw3-dev libopenal-dev libmpg123-dev libgl-dev libx11-dev libsndfile1-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVC_VENDORED_LIBRW=ON -DLIBRW_PLATFORM=GL3 -DLIBRW_GL3_GFXLIB=GLFW -DREVC_AUDIO=OAL
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Package
+        run: |
+          mkdir -p package
+          cp -R gamefiles/* package/
+          cp build/src/reVC build/mp/revc-relay build/mp/revc-server build/mp/revc-fakeclient package/
+          cp docs/multiplayer/install.md package/INSTALL-MULTIPLAYER.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reVC-multiplayer-linux
+          path: package/
+          if-no-files-found: error
+
+  game-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install glfw openal-soft mpg123
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVC_VENDORED_LIBRW=ON -DLIBRW_PLATFORM=GL3 -DLIBRW_GL3_GFXLIB=GLFW -DREVC_AUDIO=OAL
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Package
+        run: |
+          mkdir -p package
+          cp -R gamefiles/* package/
+          if [ -d build/src/reVC.app ]; then cp -R build/src/reVC.app package/; else cp build/src/reVC package/; fi
+          cp build/mp/revc-relay build/mp/revc-server build/mp/revc-fakeclient package/
+          cp docs/multiplayer/install.md package/INSTALL-MULTIPLAYER.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reVC-multiplayer-macos
+          path: package/
+          if-no-files-found: error
+
+  game-windows:
+    runs-on: windows-latest
+    env:
+      GLFW_BASE: "glfw-3.3.2.bin.WIN64"
+      GLFW_URL: "https://github.com/glfw/glfw/releases/download/3.3.2/glfw-3.3.2.bin.WIN64.zip"
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [win-amd64-librw_gl3_glfw-oal, win-amd64-librw_d3d9-oal]
+    steps:
+      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Download glfw
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:GLFW_URL -OutFile glfw.zip
+          7z x glfw.zip
+      - name: Configure
+        run: ./premake5 vs2019 --with-librw --no-full-paths --glfwdir64=${{ env.GLFW_BASE }}
+      - name: Build
+        run: msbuild -m build/reVC.sln /property:Configuration=Release /property:Platform=${{ matrix.platform }}
+      - name: Build relay and fake client
+        run: |
+          cmake -S mp -B build-mp
+          cmake --build build-mp --config Release --target revc-relay revc-server revc-fakeclient
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item -Recurse gamefiles/* package/
+          Copy-Item bin/${{ matrix.platform }}/Release/reVC.exe package/
+          Copy-Item vendor/mpg123/dist/Win64/libmpg123-0.dll package/
+          Copy-Item vendor/openal-soft/dist/Win64/OpenAL32.dll package/
+          Copy-Item build-mp/Release/revc-relay.exe, build-mp/Release/revc-server.exe, build-mp/Release/revc-fakeclient.exe package/
+          Copy-Item docs/multiplayer/install.md package/INSTALL-MULTIPLAYER.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reVC-multiplayer-${{ matrix.platform }}
+          path: package/
+          if-no-files-found: error

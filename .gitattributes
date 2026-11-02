@@ -1,0 +1,8 @@
+sdk/* linguist-vendored
+vendor/* linguist-vendored
+# Installer scripts need their native line endings
+installer/*.sh text eol=lf
+installer/*.bat text eol=crlf
+installer/*.ps1 text eol=crlf
+installer/*.command text eol=lf
+installer/*.py text eol=lf

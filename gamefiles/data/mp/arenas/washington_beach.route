@@ -1,0 +1,17 @@
+# PLACEHOLDER: built around the free-roam start that freeroam_miami.scm uses
+# (79.69 -867.25). The spawns and hills still need checking in-game; move them
+# with /rec load Washington Beach, /rec movegrid N, /rec move N, /rec save.
+name Washington Beach
+type arena
+vehicle 191
+grid 87.69 -867.25 11.50 90.0
+grid 85.35 -861.59 11.50 135.0
+grid 79.69 -859.25 11.50 180.0
+grid 74.03 -861.59 11.50 225.0
+grid 71.69 -867.25 11.50 270.0
+grid 74.03 -872.91 11.50 315.0
+grid 79.69 -875.25 11.50 360.0
+grid 85.35 -872.91 11.50 45.0
+cp 79.69 -867.25 10.50 8
+cp 79.69 -837.25 10.50 8
+cp 79.69 -897.25 10.50 8

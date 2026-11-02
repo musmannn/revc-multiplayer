@@ -1,0 +1,6 @@
+# Arenas for reVC multiplayer matches, one .route file per line (in this
+# folder). An arena is a route with "type arena": grid lines are spawn points,
+# cp lines are hill points (Hold the Hill), and an optional vehicle line is the
+# Stunt Challenge vehicle. Make new ones in a session with /rec arena NAME,
+# /rec spawn, /rec hill, /rec vehicle, /rec save.
+washington_beach.route

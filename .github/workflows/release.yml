@@ -1,0 +1,182 @@
+name: "Release: installers"
+
+# Builds the downloadable installers: reVC prebuilt for each OS, bundled with
+# installer/revc_installer.py so players need no compiler (and on Windows and
+# macOS no Python either).
+#
+# Push a tag like v0.1.0 to publish them as a GitHub release:
+#   git tag v0.1.0 && git push origin v0.1.0
+# Pushes that touch the installer, or a manual run, build them as workflow
+# artifacts only, to try them out before tagging.
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+    paths:
+      - 'installer/revc_installer.py'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # The oldest supported runner, so the game runs on older glibc versions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglfw3-dev libopenal-dev libmpg123-dev libgl-dev libx11-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVC_VENDORED_LIBRW=ON -DLIBRW_PLATFORM=GL3 -DLIBRW_GL3_GFXLIB=GLFW -DREVC_AUDIO=OAL
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="$GITHUB_REF_NAME"; else VERSION="dev-${GITHUB_SHA::7}"; fi
+          D=dist/reVC-Installer-Linux
+          P=$D/payload
+          mkdir -p $P/bin
+          cp -R gamefiles $P/gamefiles
+          cp build/src/reVC build/mp/revc-relay build/mp/revc-server build/mp/revc-fakeclient $P/bin/
+          cp INSTALLATION.md $P/
+          cp res/images/logo_256.jpg $P/revc-icon.jpg
+          echo "$VERSION" > $P/VERSION
+          cp installer/revc_installer.py $D/
+          printf '#!/bin/sh\n# Opens the reVC installer (needs python3; python3-tk for the window).\ncd "$(dirname "$0")" && exec python3 revc_installer.py "$@"\n' > $D/install.sh
+          chmod +x $D/install.sh $D/revc_installer.py
+          tar -C dist -czf reVC-Installer-Linux.tar.gz reVC-Installer-Linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: reVC-Installer-Linux.tar.gz
+          if-no-files-found: error
+
+  macos:
+    # Apple Silicon. Intel Macs can still build from source with the installer.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install glfw openal-soft mpg123
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREVC_VENDORED_LIBRW=ON -DLIBRW_PLATFORM=GL3 -DLIBRW_GL3_GFXLIB=GLFW -DREVC_AUDIO=OAL
+      - name: Build
+        run: cmake --build build --parallel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="$GITHUB_REF_NAME"; else VERSION="dev-${GITHUB_SHA::7}"; fi
+          P="$PWD/payload"
+          mkdir -p "$P/bin"
+          cp -R gamefiles "$P/gamefiles"
+          ditto -c -k --keepParent build/src/reVC.app "$P/bin/reVC.app.zip"
+          cp build/mp/revc-relay build/mp/revc-server build/mp/revc-fakeclient "$P/bin/"
+          cp INSTALLATION.md "$P/"
+          echo "$VERSION" > "$P/VERSION"
+          python -m pip install pyinstaller
+          python -m PyInstaller --noconfirm --windowed --name "reVC Installer" \
+            --add-data "$P:payload" --distpath dist --workpath pybuild installer/revc_installer.py
+          ditto -c -k --keepParent "dist/reVC Installer.app" reVC-Installer-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-macos
+          path: reVC-Installer-macOS.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    env:
+      GLFW_BASE: "glfw-3.3.2.bin.WIN64"
+      GLFW_URL: "https://github.com/glfw/glfw/releases/download/3.3.2/glfw-3.3.2.bin.WIN64.zip"
+    steps:
+      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Download glfw
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:GLFW_URL -OutFile glfw.zip
+          7z x glfw.zip
+      - name: Configure
+        run: ./premake5 vs2019 --with-librw --no-full-paths --glfwdir64=${{ env.GLFW_BASE }}
+      - name: Build (Direct3D 9)
+        run: msbuild -m build/reVC.sln /property:Configuration=Release /property:Platform=win-amd64-librw_d3d9-oal
+      - name: Build (OpenGL)
+        run: msbuild -m build/reVC.sln /property:Configuration=Release /property:Platform=win-amd64-librw_gl3_glfw-oal
+      - name: Build relay, server and fake client
+        # Static C runtime, so they run without the Visual C++ Redistributable.
+        run: |
+          cmake -S mp -B build-mp -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build build-mp --config Release --target revc-relay revc-server revc-fakeclient
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev-" + $env:GITHUB_SHA.Substring(0, 7) }
+          $p = Join-Path $PWD "payload"
+          New-Item -ItemType Directory -Force "$p/bin/d3d9", "$p/bin/gl3" | Out-Null
+          Copy-Item -Recurse gamefiles "$p/gamefiles"
+          Copy-Item bin/win-amd64-librw_d3d9-oal/Release/reVC.exe "$p/bin/d3d9/"
+          Copy-Item bin/win-amd64-librw_gl3_glfw-oal/Release/reVC.exe "$p/bin/gl3/"
+          # The OpenGL build uses the DLL C runtime; ship it next to the exe (app-local deployment).
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
+          Copy-Item "$($crt.FullName)\*.dll" "$p/bin/gl3/"
+          Copy-Item vendor/mpg123/dist/Win64/libmpg123-0.dll, vendor/openal-soft/dist/Win64/OpenAL32.dll "$p/bin/"
+          Copy-Item build-mp/Release/revc-relay.exe, build-mp/Release/revc-server.exe, build-mp/Release/revc-fakeclient.exe "$p/bin/"
+          Copy-Item INSTALLATION.md "$p/"
+          Set-Content -Path "$p/VERSION" -Value $version
+          python -m pip install pyinstaller
+          python -m PyInstaller --noconfirm --onefile --windowed --name reVC-Installer-Windows `
+            --add-data "${p};payload" --distpath dist --workpath pybuild installer/revc_installer.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows
+          path: dist/reVC-Installer-Windows.exe
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Downloads
+
+          You need your own copy of GTA Vice City for PC. reVC contains no Rockstar files.
+
+          | System | Download | Then |
+          |---|---|---|
+          | Windows 10/11 (64-bit) | `reVC-Installer-Windows.exe` | Run it. If SmartScreen warns, click **More info → Run anyway**. |
+          | macOS (Apple Silicon) | `reVC-Installer-macOS.zip` | Unzip, then right-click **reVC Installer** → **Open**. Needs [Homebrew](https://brew.sh). |
+          | Linux (x86-64) | `reVC-Installer-Linux.tar.gz` | Extract, then run `./install.sh`. |
+
+          Pick your GTA Vice City folder and click **Install**. Everyone you play with needs the same version.
+          For servers, the Linux download installs just the relay with `./install.sh --cli --relay-only`.
+          The full guide is [INSTALLATION.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALLATION.md).
+          EOF
+          gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" \
+            --title "reVC Multiplayer $GITHUB_REF_NAME" --notes-file notes.md
